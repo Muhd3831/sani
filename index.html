@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Deriv Analyzer Mobile</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#101318">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
+  <header><div><span class="dot"></span><b>DERIV ANALYZER</b><small>V3 MOBILE</small></div><span id="status">● Connecting</span></header>
+  <section class="controls">
+    <label>MARKET</label>
+    <select id="market"></select>
+    <label>TIMEFRAME</label>
+    <div class="tf"><button data-tf="60" class="active">1M</button><button data-tf="300">5M</button><button data-tf="900">15M</button><button data-tf="3600">1H</button></div>
+  </section>
+  <section class="quote"><span id="symbol">--</span><b id="price">--</b></section>
+  <section id="signal" class="signal wait">WAIT</section>
+  <section class="confidence"><span>Signal confidence</span><b id="confidence">--%</b></section>
+  <section class="cards">
+    <div><small>TREND</small><b id="trend">Waiting</b></div>
+    <div><small>MOMENTUM</small><b id="momentum">Waiting</b></div>
+    <div><small>STRUCTURE</small><b id="structure">Waiting</b></div>
+    <div><small>LIQUIDITY</small><b id="liquidity">Waiting</b></div>
+  </section>
+  <section class="analysis"><small>MARKET ANALYSIS</small><p id="reason">Connecting to Deriv public market data…</p></section>
+  <footer><span>Read-only analyzer</span><span id="clock">--:--:--</span></footer>
+</main>
+<script src="app.js"></script>
+</body></html>
