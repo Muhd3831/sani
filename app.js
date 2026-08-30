@@ -9,7 +9,7 @@ const markets = [
   ["R_50", "Volatility 50"],
   ["1HZ75V", "Volatility 75 (1s)"],
   ["R_75", "Volatility 75"],
-  ["1HZ100V", "Volatility 100 (1s)"],
+  ["1HZ100V", "Volatility 100"],
   ["R_100", "Volatility 100"],
   ["1HZ150V", "Volatility 150 (1s)"],
   ["frxEURUSD", "EUR/USD"],
@@ -19,53 +19,49 @@ const markets = [
 ];
 
 const $ = id => document.getElementById(id);
-
 const marketEl = $("market");
 
-if (marketEl) {
-  markets.forEach(([value, name]) => {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = name;
-    marketEl.appendChild(option);
-  });
-}
+markets.forEach(([value, name]) => {
+  if (!marketEl) return;
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = name;
+  marketEl.appendChild(option);
+});
 
 let symbol = "1HZ100V";
 let tf = 60;
 let ws = null;
 let candles = [];
+let tickBuffer = [];
 let reconnectTimer = null;
 let reconnectAttempts = 0;
-let manuallyClosed = false;
+let manualClose = false;
 
-if (marketEl) {
-  marketEl.value = symbol;
-}
+if (marketEl) marketEl.value = symbol;
 
-function status(text, live = false) {
-  if (!$("status")) return;
+function setStatus(text, live = false) {
+  const el = $("status");
+  if (!el) return;
 
-  $("status").textContent = "● " + text;
-  $("status").style.color = live ? "#32dc8a" : "#f0b84c";
+  el.textContent = "● " + text;
+  el.style.color = live ? "#32dc8a" : "#f0b84c";
 }
 
 function send(data) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return false;
-  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
 
   try {
     ws.send(JSON.stringify(data));
     return true;
-  } catch (error) {
-    console.error("WebSocket send error:", error);
+  } catch (e) {
+    console.error("Send error:", e);
     return false;
   }
 }
 
 function connect() {
-  manuallyClosed = false;
+  manualClose = false;
 
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -75,33 +71,45 @@ function connect() {
   if (ws) {
     try {
       ws.close();
-    } catch (e) {}
+    } catch (_) {}
   }
 
   candles = [];
-  status("Connecting");
+  tickBuffer = [];
+
+  setStatus("Connecting");
 
   try {
     ws = new WebSocket(WS);
-  } catch (error) {
-    console.error("WebSocket creation failed:", error);
-    status("Connection failed");
+  } catch (e) {
+    console.error(e);
+    setStatus("Connection failed");
     scheduleReconnect();
     return;
   }
 
   ws.onopen = () => {
-    console.log("Deriv WebSocket connected");
-
     reconnectAttempts = 0;
-    status("Live", true);
+    setStatus("Connected", true);
 
-    requestHistory();
+    send({
+      ticks_history: symbol,
+      end: "latest",
+      count: 500,
+      style: "ticks",
+      subscribe: 0,
+      req_id: 1
+    });
 
     send({
       ticks: symbol,
       subscribe: 1,
       req_id: 2
+    });
+
+    send({
+      ping: 1,
+      req_id: 3
     });
   };
 
@@ -109,34 +117,38 @@ function connect() {
     try {
       const data = JSON.parse(event.data);
       handleMessage(data);
-    } catch (error) {
-      console.error("Invalid WebSocket message:", error);
+    } catch (e) {
+      console.error("Message parse error:", e);
     }
   };
 
-  ws.onerror = error => {
-    console.error("Deriv WebSocket error:", error);
-    status("Connection error");
+  ws.onerror = event => {
+    console.error("WebSocket error:", event);
+    setStatus("Connection error");
   };
 
   ws.onclose = event => {
-    console.log("WebSocket closed:", event.code, event.reason);
+    console.log(
+      "WebSocket closed:",
+      event.code,
+      event.reason
+    );
 
-    if (!manuallyClosed) {
-      status("Disconnected");
+    if (!manualClose) {
+      setStatus("Disconnected");
       scheduleReconnect();
     }
   };
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer || manuallyClosed) return;
+  if (reconnectTimer || manualClose) return;
 
   reconnectAttempts++;
 
   const delay = Math.min(
     30000,
-    2000 * Math.max(1, reconnectAttempts)
+    2000 * reconnectAttempts
   );
 
   reconnectTimer = setTimeout(() => {
@@ -145,33 +157,31 @@ function scheduleReconnect() {
   }, delay);
 }
 
-function requestHistory() {
-  send({
-    ticks_history: symbol,
-    end: "latest",
-    count: 250,
-    style: "candles",
-    granularity: tf,
-    subscribe: 0,
-    req_id: 1
-  });
-}
-
 function handleMessage(data) {
   if (data.error) {
-    console.error("Deriv API error:", data.error);
-
-    status(
-      data.error.message
-        ? "Error: " + data.error.message
-        : "API error"
+    console.error(
+      "Deriv error:",
+      data.error
     );
+
+    setStatus("API error");
+
+    if ($("reason")) {
+      $("reason").textContent =
+        data.error.message ||
+        "Deriv API error.";
+    }
 
     return;
   }
 
+  if (data.msg_type === "history") {
+    processHistory(data.history);
+    return;
+  }
+
   if (data.msg_type === "candles") {
-    processCandles(data.candles);
+    processLegacyCandles(data.candles);
     return;
   }
 
@@ -185,12 +195,65 @@ function handleMessage(data) {
   }
 }
 
-function processCandles(data) {
-  if (!Array.isArray(data) || data.length === 0) {
-    console.warn("No candle data received");
-    status("No candle data");
+function processHistory(history) {
+  if (
+    !history ||
+    !Array.isArray(history.prices) ||
+    !Array.isArray(history.times)
+  ) {
+    console.warn(
+      "History response has no prices/times:",
+      history
+    );
+
+    setStatus("No history");
     return;
   }
+
+  const len = Math.min(
+    history.prices.length,
+    history.times.length
+  );
+
+  const ticks = [];
+
+  for (let i = 0; i < len; i++) {
+    const price =
+      Number(history.prices[i]);
+
+    const epoch =
+      Number(history.times[i]);
+
+    if (
+      Number.isFinite(price) &&
+      Number.isFinite(epoch)
+    ) {
+      ticks.push({
+        price,
+        epoch
+      });
+    }
+  }
+
+  tickBuffer = ticks.slice(-500);
+
+  candles = buildCandles(
+    tickBuffer
+  );
+
+  if (tickBuffer.length) {
+    const last =
+      tickBuffer[tickBuffer.length - 1];
+
+    showPrice(last.price);
+    showClock(last.epoch);
+  }
+
+  analyze();
+}
+
+function processLegacyCandles(data) {
+  if (!Array.isArray(data)) return;
 
   candles = data
     .map(c => ({
@@ -208,46 +271,128 @@ function processCandles(data) {
       Number.isFinite(c.close)
     );
 
-  if (candles.length > 300) {
-    candles = candles.slice(-300);
-  }
-
-  console.log("Loaded candles:", candles.length);
-
   analyze();
 }
 
 function processTick(tick) {
   if (!tick) return;
 
-  const price = Number(tick.quote);
-  const epoch = Number(tick.epoch);
+  const price =
+    Number(tick.quote);
 
-  if (!Number.isFinite(price) || !Number.isFinite(epoch)) {
+  const epoch =
+    Number(tick.epoch);
+
+  if (
+    !Number.isFinite(price) ||
+    !Number.isFinite(epoch)
+  ) {
     return;
   }
 
-  if ($("price")) {
-    $("price").textContent = tick.quote;
+  showPrice(price);
+  showClock(epoch);
+
+  tickBuffer.push({
+    price,
+    epoch
+  });
+
+  if (tickBuffer.length > 1000) {
+    tickBuffer.shift();
   }
 
-  updateCandle(epoch, price);
+  updateLocalCandle(
+    epoch,
+    price
+  );
 
   analyze();
+}
 
-  if ($("clock")) {
-    $("clock").textContent =
-      new Date(epoch * 1000).toLocaleTimeString();
+function showPrice(price) {
+  if ($("price")) {
+    $("price").textContent =
+      String(price);
+  }
+
+  if ($("symbol")) {
+    $("symbol").textContent =
+      symbol;
   }
 }
 
-function updateCandle(epoch, price) {
-  if (!candles.length) return;
+function showClock(epoch) {
+  if ($("clock")) {
+    $("clock").textContent =
+      new Date(
+        epoch * 1000
+      ).toLocaleTimeString();
+  }
+}
 
-  const bucket = Math.floor(epoch / tf) * tf;
-  const current = candles[candles.length - 1];
+function buildCandles(ticks) {
+  const result = [];
 
-  if (current.epoch !== bucket) {
+  for (const tick of ticks) {
+    const bucket =
+      Math.floor(
+        tick.epoch / tf
+      ) * tf;
+
+    let candle =
+      result[result.length - 1];
+
+    if (
+      !candle ||
+      candle.epoch !== bucket
+    ) {
+      candle = {
+        epoch: bucket,
+        open: tick.price,
+        high: tick.price,
+        low: tick.price,
+        close: tick.price
+      };
+
+      result.push(candle);
+    } else {
+      candle.close =
+        tick.price;
+
+      candle.high =
+        Math.max(
+          candle.high,
+          tick.price
+        );
+
+      candle.low =
+        Math.min(
+          candle.low,
+          tick.price
+        );
+    }
+  }
+
+  return result.slice(-300);
+}
+
+function updateLocalCandle(
+  epoch,
+  price
+) {
+  const bucket =
+    Math.floor(
+      epoch / tf
+    ) * tf;
+
+  let current =
+    candles[candles.length - 1];
+
+  if (
+    !current ||
+    current.epoch !== bucket
+  ) {
     candles.push({
       epoch: bucket,
       open: price,
@@ -264,82 +409,154 @@ function updateCandle(epoch, price) {
   }
 
   current.close = price;
-  current.high = Math.max(current.high, price);
-  current.low = Math.min(current.low, price);
+
+  current.high =
+    Math.max(
+      current.high,
+      price
+    );
+
+  current.low =
+    Math.min(
+      current.low,
+      price
+    );
 }
 
-function ema(values, period) {
-  if (values.length < period) return null;
+function ema(
+  values,
+  period
+) {
+  if (
+    values.length < period
+  ) {
+    return null;
+  }
 
-  const multiplier = 2 / (period + 1);
+  const multiplier =
+    2 / (period + 1);
 
   let result = 0;
 
-  for (let i = 0; i < period; i++) {
+  for (
+    let i = 0;
+    i < period;
+    i++
+  ) {
     result += values[i];
   }
 
   result /= period;
 
-  for (let i = period; i < values.length; i++) {
+  for (
+    let i = period;
+    i < values.length;
+    i++
+  ) {
     result =
       values[i] * multiplier +
-      result * (1 - multiplier);
+      result *
+        (1 - multiplier);
   }
 
   return result;
 }
 
-function rsi(values, period = 14) {
-  if (values.length < period + 1) {
+function rsi(
+  values,
+  period = 14
+) {
+  if (
+    values.length <
+    period + 1
+  ) {
     return 50;
   }
 
   let gains = 0;
   let losses = 0;
 
-  const start = values.length - period;
+  const start =
+    values.length - period;
 
-  for (let i = start; i < values.length; i++) {
-    const difference = values[i] - values[i - 1];
+  for (
+    let i = start;
+    i < values.length;
+    i++
+  ) {
+    const diff =
+      values[i] -
+      values[i - 1];
 
-    if (difference > 0) {
-      gains += difference;
+    if (diff > 0) {
+      gains += diff;
     } else {
-      losses += Math.abs(difference);
+      losses +=
+        Math.abs(diff);
     }
   }
 
-  if (losses === 0) return 100;
+  if (losses === 0) {
+    return gains > 0 ? 100 : 50;
+  }
 
-  const rs = gains / losses;
+  const rs =
+    gains / losses;
 
-  return 100 - 100 / (1 + rs);
+  return (
+    100 -
+    100 / (1 + rs)
+  );
 }
 
 function analyze() {
-  if (candles.length < 35) {
-    if ($("signal")) $("signal").textContent = "WAIT";
-    if ($("confidence")) $("confidence").textContent = "--";
+  if (candles.length < 22) {
+    if ($("signal")) {
+      $("signal").textContent =
+        "WAIT";
+    }
+
+    if ($("confidence")) {
+      $("confidence").textContent =
+        "--%";
+    }
+
+    if ($("reason")) {
+      $("reason").textContent =
+        "Connected. Collecting enough market data for analysis…";
+    }
+
     return;
   }
 
-  const closes = candles.map(c => c.close);
+  const closes =
+    candles.map(
+      c => c.close
+    );
 
-  const fastEMA = ema(closes, 9);
-  const slowEMA = ema(closes, 21);
-  const rsiValue = rsi(closes, 14);
+  const fast =
+    ema(closes, 9);
 
-  const last = candles[candles.length - 1];
-  const previous = candles[candles.length - 2];
+  const slow =
+    ema(closes, 21);
 
-  const previousFive = candles.slice(-6, -1);
+  const rsiValue =
+    rsi(closes, 14);
+
+  const last =
+    candles[candles.length - 1];
+
+  const previous =
+    candles[candles.length - 2];
+
+  const previousFive =
+    candles.slice(-6, -1);
 
   let trend = 0;
 
-  if (fastEMA > slowEMA) {
+  if (fast > slow) {
     trend = 1;
-  } else if (fastEMA < slowEMA) {
+  } else if (fast < slow) {
     trend = -1;
   }
 
@@ -354,41 +571,58 @@ function analyze() {
   let structure = 0;
 
   if (previousFive.length) {
-    const previousHigh = Math.max(
-      ...previousFive.map(c => c.high)
-    );
+    const high =
+      Math.max(
+        ...previousFive.map(
+          c => c.high
+        )
+      );
 
-    const previousLow = Math.min(
-      ...previousFive.map(c => c.low)
-    );
+    const low =
+      Math.min(
+        ...previousFive.map(
+          c => c.low
+        )
+      );
 
-    if (last.close > previousHigh) {
+    if (last.close > high) {
       structure = 1;
-    } else if (last.close < previousLow) {
+    } else if (
+      last.close < low
+    ) {
       structure = -1;
     }
   }
 
-  const recent = candles.slice(-20);
+  const recent =
+    candles.slice(-20);
 
-  const recentHigh = Math.max(
-    ...recent.map(c => c.high)
-  );
+  const recentHigh =
+    Math.max(
+      ...recent.map(
+        c => c.high
+      )
+    );
 
-  const recentLow = Math.min(
-    ...recent.map(c => c.low)
-  );
+  const recentLow =
+    Math.min(
+      ...recent.map(
+        c => c.low
+      )
+    );
 
   let liquidity = 0;
 
   if (
     last.low <= recentLow &&
-    last.close > previous.close
+    last.close >
+      previous.close
   ) {
     liquidity = 1;
   } else if (
     last.high >= recentHigh &&
-    last.close < previous.close
+    last.close <
+      previous.close
   ) {
     liquidity = -1;
   }
@@ -403,13 +637,20 @@ function analyze() {
 
   if (score >= 0.45) {
     signal = "BUY";
-  } else if (score <= -0.45) {
+  } else if (
+    score <= -0.45
+  ) {
     signal = "SELL";
   }
 
-  const confidence = Math.round(
-    50 + Math.min(47, Math.abs(score) * 47)
-  );
+  const confidence =
+    Math.round(
+      50 +
+        Math.min(
+          47,
+          Math.abs(score) * 47
+        )
+    );
 
   updateInterface({
     signal,
@@ -432,9 +673,12 @@ function updateInterface(data) {
   } = data;
 
   if ($("signal")) {
-    $("signal").textContent = signal;
+    $("signal").textContent =
+      signal;
+
     $("signal").className =
-      "signal " + signal.toLowerCase();
+      "signal " +
+      signal.toLowerCase();
   }
 
   if ($("confidence")) {
@@ -454,10 +698,16 @@ function updateInterface(data) {
   if ($("momentum")) {
     $("momentum").textContent =
       rsiValue > 55
-        ? "Bullish (" + rsiValue.toFixed(0) + ")"
+        ? "Bullish (" +
+          rsiValue.toFixed(0) +
+          ")"
         : rsiValue < 45
-        ? "Bearish (" + rsiValue.toFixed(0) + ")"
-        : "Mixed (" + rsiValue.toFixed(0) + ")";
+        ? "Bearish (" +
+          rsiValue.toFixed(0) +
+          ")"
+        : "Mixed (" +
+          rsiValue.toFixed(0) +
+          ")";
   }
 
   if ($("structure")) {
@@ -479,57 +729,93 @@ function updateInterface(data) {
   }
 
   if ($("symbol")) {
-    $("symbol").textContent = symbol;
+    $("symbol").textContent =
+      symbol;
   }
 
   if ($("reason")) {
-    if (signal === "BUY") {
-      $("reason").textContent =
-        "Bullish trend and momentum are aligned. Wait for a pullback/retest before acting.";
-    } else if (signal === "SELL") {
-      $("reason").textContent =
-        "Bearish trend and momentum are aligned. Wait for a pullback/retest before acting.";
-    } else {
-      $("reason").textContent =
-        "Conditions are mixed. Wait for stronger structure confirmation.";
-    }
-  }
-
-  if ($("clock")) {
-    $("clock").textContent =
-      new Date().toLocaleTimeString();
+    $("reason").textContent =
+      signal === "BUY"
+        ? "Bullish trend and momentum are aligned. Wait for a pullback/retest before acting."
+        : signal === "SELL"
+        ? "Bearish trend and momentum are aligned. Wait for a pullback/retest before acting."
+        : "Conditions are mixed. Wait for stronger structure confirmation.";
   }
 }
 
 /* Timeframe buttons */
-document.querySelectorAll(".tf button").forEach(button => {
-  button.addEventListener("click", () => {
-    document
-      .querySelectorAll(".tf button")
-      .forEach(x => x.classList.remove("active"));
 
-    button.classList.add("active");
+document
+  .querySelectorAll(".tf button")
+  .forEach(button => {
 
-    tf = Number(button.dataset.tf);
+    button.addEventListener(
+      "click",
+      () => {
 
-    candles = [];
+        document
+          .querySelectorAll(
+            ".tf button"
+          )
+          .forEach(x =>
+            x.classList.remove(
+              "active"
+            )
+          );
 
-    status("Updating");
+        button.classList.add(
+          "active"
+        );
 
-    requestHistory();
+        tf = Number(
+          button.dataset.tf
+        );
+
+        candles = [];
+        tickBuffer = [];
+
+        setStatus(
+          "Updating"
+        );
+
+        if (
+          ws &&
+          ws.readyState ===
+            WebSocket.OPEN
+        ) {
+          send({
+            ticks_history:
+              symbol,
+            end: "latest",
+            count: 500,
+            style: "ticks",
+            subscribe: 0,
+            req_id: Date.now()
+          });
+        }
+      }
+    );
   });
-});
 
 /* Market selector */
+
 if (marketEl) {
-  marketEl.addEventListener("change", () => {
-    symbol = marketEl.value;
 
-    candles = [];
+  marketEl.addEventListener(
+    "change",
+    () => {
 
-    connect();
-  });
+      symbol =
+        marketEl.value;
+
+      candles = [];
+      tickBuffer = [];
+
+      connect();
+    }
+  );
 }
 
 /* Start */
+
 connect();
