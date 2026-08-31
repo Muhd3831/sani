@@ -1,13 +1,10 @@
 // =====================================================
 // DERIV ANALYZER V3
-// Live public market data + technical analysis
+// Public Deriv Market Data
 // =====================================================
 
-const WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089";
-
-// -----------------------------------------------------
-// MARKETS
-// -----------------------------------------------------
+const WS_URL =
+  "wss://ws.binaryws.com/websockets/v3";
 
 const markets = [
   ["1HZ10V", "Volatility 10 (1s)"],
@@ -22,30 +19,26 @@ const markets = [
   ["R_100", "Volatility 100"]
 ];
 
-// -----------------------------------------------------
-// SETTINGS
-// -----------------------------------------------------
+let socket = null;
+let candles = [];
 
 let currentSymbol = "R_100";
 let currentGranularity = 60;
 
-let socket = null;
-let candles = [];
 let reconnectTimer = null;
 let reconnectAttempts = 0;
-let manuallyClosed = false;
+let requestId = 1;
 
-// -----------------------------------------------------
-// HTML ELEMENTS
-// -----------------------------------------------------
+
+// =====================================================
+// ELEMENTS
+// =====================================================
 
 const marketSelect =
-  document.getElementById("market") ||
-  document.getElementById("marketSelect");
+  document.getElementById("market");
 
 const timeframeSelect =
-  document.getElementById("timeframe") ||
-  document.getElementById("timeframeSelect");
+  document.getElementById("timeframe");
 
 const signalElement =
   document.getElementById("signal");
@@ -74,11 +67,12 @@ const statusElement =
 const analysisElement =
   document.getElementById("analysis");
 
-// -----------------------------------------------------
-// START
-// -----------------------------------------------------
 
-document.addEventListener("DOMContentLoaded", function () {
+// =====================================================
+// START
+// =====================================================
+
+function startAnalyzer() {
 
   setupMarket();
 
@@ -86,33 +80,40 @@ document.addEventListener("DOMContentLoaded", function () {
 
   setupTimeframeButtons();
 
-  connectToDeriv();
+  connect();
 
-});
+}
 
-// -----------------------------------------------------
-// MARKET SETUP
-// -----------------------------------------------------
+
+// =====================================================
+// MARKET
+// =====================================================
 
 function setupMarket() {
 
   if (!marketSelect) return;
 
-  // Only create options if it is a SELECT element
-  if (marketSelect.tagName === "SELECT") {
+  if (
+    marketSelect.tagName === "SELECT"
+  ) {
 
     marketSelect.innerHTML = "";
 
-    markets.forEach(function (market) {
+    markets.forEach(function (item) {
 
-      const option = document.createElement("option");
+      const option =
+        document.createElement("option");
 
-      option.value = market[0];
+      option.value = item[0];
 
-      option.textContent = market[1];
+      option.textContent = item[1];
 
-      if (market[0] === currentSymbol) {
+      if (
+        item[0] === currentSymbol
+      ) {
+
         option.selected = true;
+
       }
 
       marketSelect.appendChild(option);
@@ -121,53 +122,63 @@ function setupMarket() {
 
   }
 
-  marketSelect.addEventListener("change", function () {
+  marketSelect.addEventListener(
+    "change",
+    function () {
 
-    currentSymbol = this.value;
+      currentSymbol =
+        this.value;
 
-    restartMarket();
+      restart();
 
-  });
+    }
+  );
 
 }
 
-// -----------------------------------------------------
-// TIMEFRAME SELECT
-// -----------------------------------------------------
+
+// =====================================================
+// TIMEFRAME
+// =====================================================
 
 function setupTimeframe() {
 
   if (!timeframeSelect) return;
 
-  if (timeframeSelect.tagName === "SELECT") {
+  if (
+    timeframeSelect.tagName === "SELECT"
+  ) {
 
     timeframeSelect.innerHTML = `
-      <option value="60">1M</option>
-      <option value="300">5M</option>
-      <option value="900">15M</option>
-      <option value="1800">30M</option>
-      <option value="3600">1H</option>
+      <option value="60">1 Minute</option>
+      <option value="300">5 Minutes</option>
+      <option value="900">15 Minutes</option>
+      <option value="3600">1 Hour</option>
     `;
 
     timeframeSelect.value =
       String(currentGranularity);
 
-    timeframeSelect.addEventListener("change", function () {
+    timeframeSelect.addEventListener(
+      "change",
+      function () {
 
-      currentGranularity =
-        Number(this.value);
+        currentGranularity =
+          Number(this.value);
 
-      restartMarket();
+        restart();
 
-    });
+      }
+    );
 
   }
 
 }
 
-// -----------------------------------------------------
+
+// =====================================================
 // TIMEFRAME BUTTONS
-// -----------------------------------------------------
+// =====================================================
 
 function setupTimeframeButtons() {
 
@@ -178,52 +189,72 @@ function setupTimeframeButtons() {
 
   buttons.forEach(function (button) {
 
-    button.addEventListener("click", function () {
+    button.addEventListener(
+      "click",
+      function () {
 
-      const value =
-        Number(
-          button.getAttribute("data-timeframe")
+        const value =
+          Number(
+            button.getAttribute(
+              "data-timeframe"
+            )
+          );
+
+        if (!value) return;
+
+        currentGranularity =
+          value;
+
+        buttons.forEach(
+          function (btn) {
+
+            btn.classList.remove(
+              "active"
+            );
+
+          }
         );
 
-      if (!value) return;
+        button.classList.add(
+          "active"
+        );
 
-      currentGranularity = value;
+        restart();
 
-      buttons.forEach(function (btn) {
-        btn.classList.remove("active");
-      });
-
-      button.classList.add("active");
-
-      restartMarket();
-
-    });
+      }
+    );
 
   });
 
 }
 
-// -----------------------------------------------------
-// CONNECT TO DERIV
-// -----------------------------------------------------
 
-function connectToDeriv() {
+// =====================================================
+// CONNECT
+// =====================================================
 
-  manuallyClosed = false;
+function connect() {
 
-  clearTimeout(reconnectTimer);
+  clearTimeout(
+    reconnectTimer
+  );
 
-  updateStatus("Connecting...");
+  updateStatus(
+    "Connecting..."
+  );
 
   try {
 
-    socket = new WebSocket(WS_URL);
+    socket =
+      new WebSocket(
+        WS_URL
+      );
 
   } catch (error) {
 
-    console.error(error);
-
-    updateStatus("Connection error");
+    showDerivError(
+      error.message
+    );
 
     scheduleReconnect();
 
@@ -231,110 +262,111 @@ function connectToDeriv() {
 
   }
 
-  socket.onopen = function () {
 
-    console.log("Connected to Deriv");
+  socket.onopen =
+    function () {
 
-    reconnectAttempts = 0;
+      console.log(
+        "DERIV CONNECTED"
+      );
 
-    updateStatus("Connected");
+      reconnectAttempts = 0;
 
-    requestCandles();
+      updateStatus(
+        "Connected"
+      );
 
-  };
+      requestCandles();
 
-  socket.onmessage = function (event) {
+    };
 
-    try {
 
-      const data =
-        JSON.parse(event.data);
+  socket.onmessage =
+    function (event) {
 
-      handleDerivMessage(data);
+      try {
 
-    } catch (error) {
+        const data =
+          JSON.parse(
+            event.data
+          );
+
+        console.log(
+          "DERIV RESPONSE:",
+          data
+        );
+
+        handleMessage(
+          data
+        );
+
+      } catch (error) {
+
+        console.error(
+          error
+        );
+
+      }
+
+    };
+
+
+  socket.onerror =
+    function (error) {
 
       console.error(
-        "Message parsing error:",
+        "WEBSOCKET ERROR:",
         error
       );
 
-    }
+      updateStatus(
+        "Connection error"
+      );
 
-  };
+    };
 
-  socket.onerror = function (error) {
 
-    console.error(
-      "Deriv WebSocket error:",
-      error
-    );
+  socket.onclose =
+    function () {
 
-    updateStatus("Connection error");
+      console.log(
+        "DERIV DISCONNECTED"
+      );
 
-  };
-
-  socket.onclose = function () {
-
-    console.log(
-      "Deriv connection closed"
-    );
-
-    if (!manuallyClosed) {
-
-      updateStatus("Reconnecting...");
+      updateStatus(
+        "Reconnecting..."
+      );
 
       scheduleReconnect();
 
-    }
-
-  };
+    };
 
 }
 
-// -----------------------------------------------------
-// RECONNECT
-// -----------------------------------------------------
 
-function scheduleReconnect() {
-
-  clearTimeout(reconnectTimer);
-
-  reconnectAttempts++;
-
-  const delay =
-    Math.min(
-      10000,
-      2000 * reconnectAttempts
-    );
-
-  reconnectTimer =
-    setTimeout(function () {
-
-      connectToDeriv();
-
-    }, delay);
-
-}
-
-// -----------------------------------------------------
+// =====================================================
 // REQUEST CANDLES
-// -----------------------------------------------------
+// =====================================================
 
 function requestCandles() {
 
   if (
     !socket ||
-    socket.readyState !== WebSocket.OPEN
+    socket.readyState !==
+      WebSocket.OPEN
   ) {
+
     return;
+
   }
 
   candles = [];
 
+
   const request = {
 
-    ticks_history: currentSymbol,
+    ticks_history:
+      currentSymbol,
 
     adjust_start_time: 1,
 
@@ -342,89 +374,122 @@ function requestCandles() {
 
     end: "latest",
 
-    start: 1,
-
     style: "candles",
 
     granularity:
       currentGranularity,
 
-    subscribe: 1
+    subscribe: 1,
+
+    req_id:
+      requestId++
 
   };
 
+
   console.log(
-    "Requesting:",
-    currentSymbol,
-    currentGranularity
+    "REQUESTING CANDLES:",
+    request
   );
 
+
   socket.send(
-    JSON.stringify(request)
+    JSON.stringify(
+      request
+    )
   );
 
 }
 
-// -----------------------------------------------------
-// HANDLE DERIV MESSAGE
-// -----------------------------------------------------
 
-function handleDerivMessage(data) {
+// =====================================================
+// HANDLE MESSAGE
+// =====================================================
+
+function handleMessage(data) {
+
+  // -----------------------------------------
+  // ERROR
+  // -----------------------------------------
 
   if (data.error) {
 
+    const message =
+      data.error.message ||
+      data.error.code ||
+      "Unknown Deriv error";
+
     console.error(
-      "Deriv API error:",
+      "DERIV API ERROR:",
       data.error
     );
 
-    updateStatus(
-      "Deriv error"
+    showDerivError(
+      message
     );
 
     return;
 
   }
 
-  // Initial candle history
-  if (data.msg_type === "candles") {
 
-    if (Array.isArray(data.candles)) {
+  // -----------------------------------------
+  // CANDLES
+  // -----------------------------------------
+
+  if (
+    data.msg_type ===
+    "candles"
+  ) {
+
+    if (
+      Array.isArray(
+        data.candles
+      )
+    ) {
 
       candles =
-        data.candles.map(function (candle) {
+        data.candles.map(
+          function (c) {
 
-          return {
+            return {
 
-            epoch:
-              Number(candle.epoch),
+              epoch:
+                Number(c.epoch),
 
-            open:
-              Number(candle.open),
+              open:
+                Number(c.open),
 
-            high:
-              Number(candle.high),
+              high:
+                Number(c.high),
 
-            low:
-              Number(candle.low),
+              low:
+                Number(c.low),
 
-            close:
-              Number(candle.close)
+              close:
+                Number(c.close)
 
-          };
+            };
 
-        });
+          }
+        );
+
 
       console.log(
-        "Candles received:",
+        "CANDLES RECEIVED:",
         candles.length
       );
 
-      updateStatus("Connected");
+
+      updateStatus(
+        "Connected"
+      );
+
+      clearError();
 
       updatePrice();
 
-      analyzeMarket();
+      analyze();
 
     }
 
@@ -432,10 +497,17 @@ function handleDerivMessage(data) {
 
   }
 
-  // Live candle update
-  if (data.msg_type === "ohlc") {
 
-    processLiveCandle(
+  // -----------------------------------------
+  // LIVE OHLC
+  // -----------------------------------------
+
+  if (
+    data.msg_type ===
+    "ohlc"
+  ) {
+
+    updateLiveCandle(
       data.ohlc
     );
 
@@ -445,75 +517,94 @@ function handleDerivMessage(data) {
 
 }
 
-// -----------------------------------------------------
+
+// =====================================================
 // LIVE CANDLE
-// -----------------------------------------------------
+// =====================================================
 
-function processLiveCandle(candle) {
+function updateLiveCandle(c) {
 
-  if (!candle) return;
+  if (!c) return;
 
-  const newCandle = {
+
+  const candle = {
 
     epoch:
-      Number(candle.epoch),
+      Number(c.epoch),
 
     open:
-      Number(candle.open),
+      Number(c.open),
 
     high:
-      Number(candle.high),
+      Number(c.high),
 
     low:
-      Number(candle.low),
+      Number(c.low),
 
     close:
-      Number(candle.close)
+      Number(c.close)
 
   };
 
-  if (candles.length === 0) {
 
-    candles.push(newCandle);
+  if (
+    candles.length === 0
+  ) {
+
+    candles.push(
+      candle
+    );
 
   } else {
 
     const last =
-      candles[candles.length - 1];
+      candles[
+        candles.length - 1
+      ];
+
 
     if (
       Number(last.epoch) ===
-      newCandle.epoch
+      candle.epoch
     ) {
 
       candles[
         candles.length - 1
-      ] = newCandle;
+      ] = candle;
 
     } else if (
-      newCandle.epoch >
+      candle.epoch >
       Number(last.epoch)
     ) {
 
-      candles.push(newCandle);
+      candles.push(
+        candle
+      );
 
     }
 
   }
 
-  if (candles.length > 250) {
+
+  if (
+    candles.length > 250
+  ) {
+
     candles.shift();
+
   }
+
 
   updatePrice();
 
-  analyzeMarket();
+  analyze();
 
 }
 
-// -----------------------------------------------------
+
+// =====================================================
 // PRICE
-// -----------------------------------------------------
+// =====================================================
 
 function updatePrice() {
 
@@ -521,47 +612,50 @@ function updatePrice() {
     !priceElement ||
     candles.length === 0
   ) {
+
     return;
+
   }
+
 
   const last =
-    candles[candles.length - 1];
+    candles[
+      candles.length - 1
+    ];
+
 
   priceElement.textContent =
-    formatPrice(last.close);
+    Number(
+      last.close
+    ).toFixed(2);
 
 }
 
-// -----------------------------------------------------
-// PRICE FORMAT
-// -----------------------------------------------------
 
-function formatPrice(price) {
-
-  if (!Number.isFinite(price)) {
-    return "--";
-  }
-
-  return price.toFixed(2);
-
-}
-
-// -----------------------------------------------------
+// =====================================================
 // EMA
-// -----------------------------------------------------
+// =====================================================
 
-function calculateEMA(values, period) {
+function EMA(
+  values,
+  period
+) {
 
   if (
     values.length < period
   ) {
+
     return null;
+
   }
+
 
   const multiplier =
     2 / (period + 1);
 
+
   let ema = 0;
+
 
   for (
     let i = 0;
@@ -569,11 +663,15 @@ function calculateEMA(values, period) {
     i++
   ) {
 
-    ema += values[i];
+    ema +=
+      values[i];
 
   }
 
-  ema /= period;
+
+  ema /=
+    period;
+
 
   for (
     let i = period;
@@ -583,22 +681,25 @@ function calculateEMA(values, period) {
 
     ema =
       (
-        values[i] - ema
+        values[i] -
+        ema
       ) *
       multiplier +
       ema;
 
   }
 
+
   return ema;
 
 }
 
-// -----------------------------------------------------
-// RSI
-// -----------------------------------------------------
 
-function calculateRSI(
+// =====================================================
+// RSI
+// =====================================================
+
+function RSI(
   values,
   period = 14
 ) {
@@ -606,15 +707,21 @@ function calculateRSI(
   if (
     values.length <= period
   ) {
+
     return 50;
+
   }
 
-  let gain = 0;
 
-  let loss = 0;
+  let gains = 0;
+
+  let losses = 0;
+
 
   const start =
-    values.length - period;
+    values.length -
+    period;
+
 
   for (
     let i = start;
@@ -626,26 +733,39 @@ function calculateRSI(
       values[i] -
       values[i - 1];
 
-    if (change > 0) {
 
-      gain += change;
+    if (
+      change > 0
+    ) {
+
+      gains +=
+        change;
 
     } else {
 
-      loss +=
-        Math.abs(change);
+      losses +=
+        Math.abs(
+          change
+        );
 
     }
 
   }
 
-  if (loss === 0) {
+
+  if (
+    losses === 0
+  ) {
+
     return 100;
+
   }
 
+
   const rs =
-    (gain / period) /
-    (loss / period);
+    (gains / period) /
+    (losses / period);
+
 
   return (
     100 -
@@ -654,303 +774,12 @@ function calculateRSI(
 
 }
 
-// -----------------------------------------------------
-// ATR
-// -----------------------------------------------------
 
-function calculateATR(
-  candleData,
-  period = 14
-) {
+// =====================================================
+// ANALYSIS
+// =====================================================
 
-  if (
-    candleData.length <= period
-  ) {
-    return 0;
-  }
-
-  const trueRanges = [];
-
-  for (
-    let i = 1;
-    i < candleData.length;
-    i++
-  ) {
-
-    const current =
-      candleData[i];
-
-    const previous =
-      candleData[i - 1];
-
-    const tr =
-      Math.max(
-
-        current.high -
-          current.low,
-
-        Math.abs(
-          current.high -
-          previous.close
-        ),
-
-        Math.abs(
-          current.low -
-          previous.close
-        )
-
-      );
-
-    trueRanges.push(tr);
-
-  }
-
-  const recent =
-    trueRanges.slice(-period);
-
-  if (recent.length === 0) {
-    return 0;
-  }
-
-  return (
-    recent.reduce(
-      (a, b) => a + b,
-      0
-    ) /
-    recent.length
-  );
-
-}
-
-// -----------------------------------------------------
-// TREND
-// -----------------------------------------------------
-
-function calculateTrend(
-  closes
-) {
-
-  if (
-    closes.length < 30
-  ) {
-    return "WAITING";
-  }
-
-  const ema9 =
-    calculateEMA(closes, 9);
-
-  const ema21 =
-    calculateEMA(closes, 21);
-
-  const ema50 =
-    calculateEMA(closes, 50);
-
-  if (
-    ema9 === null ||
-    ema21 === null ||
-    ema50 === null
-  ) {
-    return "WAITING";
-  }
-
-  const price =
-    closes[closes.length - 1];
-
-  if (
-    ema9 > ema21 &&
-    ema21 > ema50 &&
-    price > ema9
-  ) {
-
-    return "BULLISH";
-
-  }
-
-  if (
-    ema9 < ema21 &&
-    ema21 < ema50 &&
-    price < ema9
-  ) {
-
-    return "BEARISH";
-
-  }
-
-  if (
-    ema9 > ema21
-  ) {
-
-    return "BULLISH";
-
-  }
-
-  if (
-    ema9 < ema21
-  ) {
-
-    return "BEARISH";
-
-  }
-
-  return "SIDEWAYS";
-
-}
-
-// -----------------------------------------------------
-// MOMENTUM
-// -----------------------------------------------------
-
-function calculateMomentum(
-  closes
-) {
-
-  if (
-    closes.length < 10
-  ) {
-    return "WAITING";
-  }
-
-  const current =
-    closes[closes.length - 1];
-
-  const previous =
-    closes[closes.length - 6];
-
-  if (
-    current > previous
-  ) {
-
-    return "BUYING";
-
-  }
-
-  if (
-    current < previous
-  ) {
-
-    return "SELLING";
-
-  }
-
-  return "NEUTRAL";
-
-}
-
-// -----------------------------------------------------
-// MARKET STRUCTURE
-// -----------------------------------------------------
-
-function calculateStructure(
-  candleData
-) {
-
-  if (
-    candleData.length < 20
-  ) {
-    return "WAITING";
-  }
-
-  const recent =
-    candleData.slice(-20);
-
-  const highs =
-    recent.map(c => c.high);
-
-  const lows =
-    recent.map(c => c.low);
-
-  const current =
-    recent[recent.length - 1]
-      .close;
-
-  const highest =
-    Math.max(...highs);
-
-  const lowest =
-    Math.min(...lows);
-
-  const range =
-    highest - lowest;
-
-  if (range <= 0) {
-    return "NEUTRAL";
-  }
-
-  const position =
-    (current - lowest) /
-    range;
-
-  if (position > 0.70) {
-    return "HIGH";
-  }
-
-  if (position < 0.30) {
-    return "LOW";
-  }
-
-  return "MID-RANGE";
-
-}
-
-// -----------------------------------------------------
-// LIQUIDITY
-// -----------------------------------------------------
-
-function calculateLiquidity(
-  candleData
-) {
-
-  if (
-    candleData.length < 20
-  ) {
-    return "WAITING";
-  }
-
-  const recent =
-    candleData.slice(-20);
-
-  const atr =
-    calculateATR(
-      candleData,
-      14
-    );
-
-  if (atr <= 0) {
-    return "NORMAL";
-  }
-
-  const last =
-    recent[recent.length - 1];
-
-  const range =
-    last.high -
-    last.low;
-
-  if (
-    range > atr * 1.8
-  ) {
-
-    return "HIGH";
-
-  }
-
-  if (
-    range < atr * 0.5
-  ) {
-
-    return "LOW";
-
-  }
-
-  return "NORMAL";
-
-}
-
-// -----------------------------------------------------
-// MAIN ANALYSIS
-// -----------------------------------------------------
-
-function analyzeMarket() {
+function analyze() {
 
   if (
     candles.length < 50
@@ -961,19 +790,23 @@ function analyzeMarket() {
       0
     );
 
-    setTrend(
+    setText(
+      trendElement,
       "Waiting"
     );
 
-    setMomentum(
+    setText(
+      momentumElement,
       "Waiting"
     );
 
-    setStructure(
+    setText(
+      structureElement,
       "Waiting"
     );
 
-    setLiquidity(
+    setText(
+      liquidityElement,
       "Waiting"
     );
 
@@ -981,308 +814,440 @@ function analyzeMarket() {
 
   }
 
+
   const closes =
     candles.map(
       c => c.close
     );
 
-  const trend =
-    calculateTrend(
-      closes
-    );
-
-  const momentum =
-    calculateMomentum(
-      closes
-    );
-
-  const structure =
-    calculateStructure(
-      candles
-    );
-
-  const liquidity =
-    calculateLiquidity(
-      candles
-    );
 
   const ema9 =
-    calculateEMA(
+    EMA(
       closes,
       9
     );
 
   const ema21 =
-    calculateEMA(
+    EMA(
       closes,
       21
     );
 
+  const ema50 =
+    EMA(
+      closes,
+      50
+    );
+
+
   const rsi =
-    calculateRSI(
+    RSI(
       closes,
       14
     );
 
-  let buyScore = 0;
 
-  let sellScore = 0;
+  const price =
+    closes[
+      closes.length - 1
+    ];
 
-  // -------------------------------
+
+  let buy = 0;
+
+  let sell = 0;
+
+
+  // -----------------------------
   // TREND
-  // -------------------------------
+  // -----------------------------
+
+  let trend =
+    "SIDEWAYS";
+
 
   if (
-    trend === "BULLISH"
+    ema9 > ema21 &&
+    ema21 > ema50
   ) {
 
-    buyScore += 30;
+    trend =
+      "BULLISH";
+
+    buy += 35;
 
   }
 
-  if (
-    trend === "BEARISH"
+
+  else if (
+    ema9 < ema21 &&
+    ema21 < ema50
   ) {
 
-    sellScore += 30;
+    trend =
+      "BEARISH";
+
+    sell += 35;
 
   }
 
-  // -------------------------------
-  // EMA
-  // -------------------------------
 
-  if (
+  else if (
     ema9 > ema21
   ) {
 
-    buyScore += 20;
+    trend =
+      "BULLISH";
+
+    buy += 20;
 
   }
 
-  if (
+
+  else if (
     ema9 < ema21
   ) {
 
-    sellScore += 20;
+    trend =
+      "BEARISH";
+
+    sell += 20;
 
   }
 
-  // -------------------------------
+
+  // -----------------------------
   // RSI
-  // -------------------------------
+  // -----------------------------
 
   if (
-    rsi >= 50 &&
-    rsi <= 70
+    rsi > 50 &&
+    rsi < 70
   ) {
 
-    buyScore += 20;
+    buy += 20;
 
   }
 
+
   if (
-    rsi <= 50 &&
-    rsi >= 30
+    rsi < 50 &&
+    rsi > 30
   ) {
 
-    sellScore += 20;
+    sell += 20;
 
   }
 
-  // -------------------------------
+
+  // -----------------------------
   // MOMENTUM
-  // -------------------------------
+  // -----------------------------
+
+  const oldPrice =
+    closes[
+      closes.length - 6
+    ];
+
+
+  let momentum =
+    "NEUTRAL";
+
 
   if (
-    momentum === "BUYING"
+    price > oldPrice
   ) {
 
-    buyScore += 15;
+    momentum =
+      "BUYING";
+
+    buy += 20;
 
   }
 
+
   if (
-    momentum === "SELLING"
+    price < oldPrice
   ) {
 
-    sellScore += 15;
+    momentum =
+      "SELLING";
+
+    sell += 20;
 
   }
 
-  // -------------------------------
-  // CANDLE
-  // -------------------------------
+
+  // -----------------------------
+  // LAST CANDLE
+  // -----------------------------
 
   const last =
-    candles[candles.length - 1];
+    candles[
+      candles.length - 1
+    ];
+
 
   if (
     last.close >
     last.open
   ) {
 
-    buyScore += 10;
+    buy += 10;
 
   }
+
 
   if (
     last.close <
     last.open
   ) {
 
-    sellScore += 10;
+    sell += 10;
 
   }
 
-  // -------------------------------
+
+  // -----------------------------
   // STRUCTURE
-  // -------------------------------
+  // -----------------------------
 
-  if (
-    structure === "LOW"
-  ) {
-
-    buyScore += 5;
-
-  }
-
-  if (
-    structure === "HIGH"
-  ) {
-
-    sellScore += 5;
-
-  }
-
-  // -------------------------------
-  // SIGNAL
-  // -------------------------------
-
-  let signal = "WAIT";
-
-  let confidence = 50;
-
-  const difference =
-    Math.abs(
-      buyScore -
-      sellScore
+  const recent =
+    candles.slice(
+      -20
     );
 
+
+  const high =
+    Math.max(
+      ...recent.map(
+        c => c.high
+      )
+    );
+
+
+  const low =
+    Math.min(
+      ...recent.map(
+        c => c.low
+      )
+    );
+
+
+  const range =
+    high - low;
+
+
+  let structure =
+    "MID-RANGE";
+
+
   if (
-    buyScore > sellScore &&
-    buyScore >= 60
+    range > 0
   ) {
 
-    signal = "BUY";
+    const position =
+      (
+        price - low
+      ) /
+      range;
+
+
+    if (
+      position < 0.30
+    ) {
+
+      structure =
+        "LOW";
+
+      buy += 5;
+
+    }
+
+
+    else if (
+      position > 0.70
+    ) {
+
+      structure =
+        "HIGH";
+
+      sell += 5;
+
+    }
+
+  }
+
+
+  // -----------------------------
+  // LIQUIDITY
+  // -----------------------------
+
+  const lastRange =
+    last.high -
+    last.low;
+
+
+  let liquidity =
+    "NORMAL";
+
+
+  if (
+    range > 0 &&
+    lastRange >
+      range * 0.20
+  ) {
+
+    liquidity =
+      "HIGH";
+
+  }
+
+
+  // -----------------------------
+  // FINAL SIGNAL
+  // -----------------------------
+
+  let signal =
+    "WAIT";
+
+
+  let confidence =
+    50;
+
+
+  if (
+    buy > sell &&
+    buy >= 60
+  ) {
+
+    signal =
+      "BUY";
 
     confidence =
       Math.min(
         95,
-        50 + difference
+        50 +
+        (buy - sell)
       );
 
-  } else if (
-    sellScore > buyScore &&
-    sellScore >= 60
+  }
+
+
+  else if (
+    sell > buy &&
+    sell >= 60
   ) {
 
-    signal = "SELL";
+    signal =
+      "SELL";
 
     confidence =
       Math.min(
         95,
-        50 + difference
+        50 +
+        (sell - buy)
       );
 
-  } else {
+  }
 
-    signal = "WAIT";
+
+  else {
+
+    signal =
+      "WAIT";
 
     confidence =
       Math.min(
         65,
-        45 + difference
+        45 +
+        Math.abs(
+          buy - sell
+        )
       );
 
   }
 
-  // -------------------------------
+
+  // -----------------------------
   // DISPLAY
-  // -------------------------------
+  // -----------------------------
 
   setSignal(
     signal,
     confidence
   );
 
-  setTrend(
+  setText(
+    trendElement,
     trend
   );
 
-  setMomentum(
+  setText(
+    momentumElement,
     momentum
   );
 
-  setStructure(
+  setText(
+    structureElement,
     structure
   );
 
-  setLiquidity(
+  setText(
+    liquidityElement,
     liquidity
   );
 
-  console.log(
-    "MARKET ANALYSIS",
-    {
-      market:
-        currentSymbol,
 
-      timeframe:
-        currentGranularity,
+  console.log({
+    market:
+      currentSymbol,
 
-      price:
-        last.close,
+    timeframe:
+      currentGranularity,
 
-      RSI:
-        rsi.toFixed(2),
+    price,
 
-      EMA9:
-        ema9.toFixed(2),
+    ema9,
 
-      EMA21:
-        ema21.toFixed(2),
+    ema21,
 
-      trend,
+    ema50,
 
-      momentum,
+    rsi,
 
-      structure,
+    trend,
 
-      liquidity,
+    momentum,
 
-      buyScore,
+    structure,
 
-      sellScore,
+    liquidity,
 
-      signal,
+    buy,
 
-      confidence
-    }
-  );
+    sell,
+
+    signal,
+
+    confidence
+  });
 
 }
 
-// -----------------------------------------------------
+
+// =====================================================
 // DISPLAY SIGNAL
-// -----------------------------------------------------
+// =====================================================
 
 function setSignal(
   signal,
   confidence
 ) {
 
-  if (signalElement) {
+  if (
+    signalElement
+  ) {
 
     signalElement.textContent =
       signal;
@@ -1299,7 +1264,10 @@ function setSignal(
 
   }
 
-  if (confidenceElement) {
+
+  if (
+    confidenceElement
+  ) {
 
     if (
       confidence === 0
@@ -1321,67 +1289,39 @@ function setSignal(
 
 }
 
-// -----------------------------------------------------
-// DISPLAY TREND
-// -----------------------------------------------------
 
-function setTrend(value) {
+// =====================================================
+// TEXT HELPER
+// =====================================================
 
-  if (!trendElement) return;
+function setText(
+  element,
+  value
+) {
 
-  trendElement.textContent =
-    value;
+  if (
+    element
+  ) {
 
-}
+    element.textContent =
+      value;
 
-// -----------------------------------------------------
-// DISPLAY MOMENTUM
-// -----------------------------------------------------
-
-function setMomentum(value) {
-
-  if (!momentumElement) return;
-
-  momentumElement.textContent =
-    value;
+  }
 
 }
 
-// -----------------------------------------------------
-// DISPLAY STRUCTURE
-// -----------------------------------------------------
 
-function setStructure(value) {
-
-  if (!structureElement) return;
-
-  structureElement.textContent =
-    value;
-
-}
-
-// -----------------------------------------------------
-// DISPLAY LIQUIDITY
-// -----------------------------------------------------
-
-function setLiquidity(value) {
-
-  if (!liquidityElement) return;
-
-  liquidityElement.textContent =
-    value;
-
-}
-
-// -----------------------------------------------------
+// =====================================================
 // STATUS
-// -----------------------------------------------------
+// =====================================================
 
 function updateStatus(
   status
 ) {
 
-  if (statusElement) {
+  if (
+    statusElement
+  ) {
 
     statusElement.textContent =
       status;
@@ -1395,11 +1335,62 @@ function updateStatus(
 
 }
 
-// -----------------------------------------------------
-// RESTART MARKET
-// -----------------------------------------------------
 
-function restartMarket() {
+// =====================================================
+// SHOW REAL DERIV ERROR
+// =====================================================
+
+function showDerivError(
+  message
+) {
+
+  updateStatus(
+    "Deriv error"
+  );
+
+
+  if (
+    analysisElement
+  ) {
+
+    analysisElement.textContent =
+      "Deriv error: " +
+      message;
+
+  }
+
+
+  console.error(
+    "DERIV ERROR:",
+    message
+  );
+
+}
+
+
+// =====================================================
+// CLEAR ERROR
+// =====================================================
+
+function clearError() {
+
+  if (
+    analysisElement
+  ) {
+
+    analysisElement.textContent =
+      "Live market analysis";
+
+  }
+
+}
+
+
+// =====================================================
+// RESTART
+// =====================================================
+
+function restart() {
 
   candles = [];
 
@@ -1408,21 +1399,26 @@ function restartMarket() {
     0
   );
 
-  setTrend(
-    "Connecting..."
+  setText(
+    trendElement,
+    "Waiting"
   );
 
-  setMomentum(
-    "Connecting..."
+  setText(
+    momentumElement,
+    "Waiting"
   );
 
-  setStructure(
-    "Connecting..."
+  setText(
+    structureElement,
+    "Waiting"
   );
 
-  setLiquidity(
-    "Connecting..."
+  setText(
+    liquidityElement,
+    "Waiting"
   );
+
 
   if (
     socket &&
@@ -1434,51 +1430,55 @@ function restartMarket() {
 
   } else {
 
-    connectToDeriv();
+    connect();
 
   }
 
 }
 
-// -----------------------------------------------------
-// PAGE VISIBILITY
-// -----------------------------------------------------
 
-document.addEventListener(
-  "visibilitychange",
-  function () {
+// =====================================================
+// RECONNECT
+// =====================================================
 
-    if (
-      document.visibilityState ===
-      "visible"
-    ) {
+function scheduleReconnect() {
 
-      if (
-        !socket ||
-        socket.readyState !==
-          WebSocket.OPEN
-      ) {
+  clearTimeout(
+    reconnectTimer
+  );
 
-        connectToDeriv();
 
-      }
+  reconnectAttempts++;
 
-    }
 
-  }
-);
+  const delay =
+    Math.min(
+      10000,
+      2000 *
+      reconnectAttempts
+    );
 
-// -----------------------------------------------------
+
+  reconnectTimer =
+    setTimeout(
+      function () {
+
+        connect();
+
+      },
+      delay
+    );
+
+}
+
+
+// =====================================================
 // INTERNET RECOVERY
-// -----------------------------------------------------
+// =====================================================
 
 window.addEventListener(
   "online",
   function () {
-
-    console.log(
-      "Internet connection restored"
-    );
 
     if (
       !socket ||
@@ -1486,9 +1486,30 @@ window.addEventListener(
         WebSocket.OPEN
     ) {
 
-      connectToDeriv();
+      connect();
 
     }
 
   }
 );
+
+
+// =====================================================
+// START AFTER PAGE LOAD
+// =====================================================
+
+if (
+  document.readyState ===
+  "loading"
+) {
+
+  document.addEventListener(
+    "DOMContentLoaded",
+    startAnalyzer
+  );
+
+} else {
+
+  startAnalyzer();
+
+}
