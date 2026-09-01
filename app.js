@@ -230,174 +230,244 @@ function setupTimeframeButtons() {
 
 
 // =====================================================
-// CONNECT
+// CONNECT + MARKET DATA
 // =====================================================
 
 function connect() {
 
-  clearTimeout(
-    reconnectTimer
-  );
+  clearTimeout(reconnectTimer);
+  stopKeepAlive();
 
-  updateStatus(
-    "Connecting..."
-  );
-
-  try {
-
-    socket =
-      new WebSocket(
-        WS_URL
-      );
-
-  } catch (error) {
-
-    showDerivError(
-      error.message
-    );
-
-    scheduleReconnect();
-
-    return;
-
+  if (socket) {
+    try {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+    } catch (e) {}
   }
 
+  updateStatus("Connecting...");
 
-  socket.onopen =
-    function () {
+  try {
+    socket = new WebSocket(WS_URL);
+  } catch (error) {
+    showDerivError(error.message || "Unable to create WebSocket");
+    scheduleReconnect();
+    return;
+  }
 
-      console.log(
-        "DERIV CONNECTED"
-      );
+  socket.onopen = function () {
+    console.log("DERIV CONNECTED");
+    reconnectAttempts = 0;
+    updateStatus("Connected");
+    clearError();
+    startKeepAlive();
 
-      reconnectAttempts = 0;
+    // First get a one-time candle snapshot, then subscribe to ticks.
+    requestCandles();
+    subscribeTicks();
+  };
 
-      updateStatus(
-        "Connected"
-      );
+  socket.onmessage = function (event) {
+    try {
+      const data = JSON.parse(event.data);
+      console.log("DERIV RESPONSE:", data);
+      handleMessage(data);
+    } catch (error) {
+      console.error("DERIV MESSAGE ERROR:", error);
+    }
+  };
 
-      requestCandles();
+  socket.onerror = function (error) {
+    console.error("WEBSOCKET ERROR:", error);
+    updateStatus("Connection error");
+  };
 
-    };
+  socket.onclose = function (event) {
+    console.warn(
+      "DERIV DISCONNECTED",
+      event.code,
+      event.reason || ""
+    );
+
+    stopKeepAlive();
+    updateStatus("Reconnecting...");
+    scheduleReconnect();
+  };
+}
 
 
-  socket.onmessage =
-    function (event) {
+function startKeepAlive() {
 
-      try {
+  stopKeepAlive();
 
-        const data =
-          JSON.parse(
-            event.data
+  window.__derivKeepAlive =
+    setInterval(function () {
+
+      if (
+        socket &&
+        socket.readyState === WebSocket.OPEN
+      ) {
+
+        try {
+
+          socket.send(
+            JSON.stringify({
+              ping: 1,
+              req_id: requestId++
+            })
           );
 
-        console.log(
-          "DERIV RESPONSE:",
-          data
-        );
+        } catch (e) {
 
-        handleMessage(
-          data
-        );
+          console.warn(
+            "Keep-alive failed",
+            e
+          );
 
-      } catch (error) {
-
-        console.error(
-          error
-        );
+        }
 
       }
 
-    };
+    }, 30000);
+}
 
 
-  socket.onerror =
-    function (error) {
+function stopKeepAlive() {
 
-      console.error(
-        "WEBSOCKET ERROR:",
-        error
-      );
+  if (window.__derivKeepAlive) {
 
-      updateStatus(
-        "Connection error"
-      );
+    clearInterval(
+      window.__derivKeepAlive
+    );
 
-    };
+    window.__derivKeepAlive = null;
+
+  }
+
+}
 
 
-  socket.onclose =
-    function () {
+function sendRequest(request) {
 
-      console.log(
-        "DERIV DISCONNECTED"
-      );
+  if (
+    !socket ||
+    socket.readyState !== WebSocket.OPEN
+  ) {
 
-      updateStatus(
-        "Reconnecting..."
-      );
+    console.warn(
+      "Socket not ready",
+      request
+    );
 
-      scheduleReconnect();
+    return false;
+  }
 
-    };
+  try {
+
+    socket.send(
+      JSON.stringify(request)
+    );
+
+    return true;
+
+  } catch (error) {
+
+    console.error(
+      "SEND ERROR:",
+      error
+    );
+
+    return false;
+
+  }
 
 }
 
 
 // =====================================================
-// REQUEST CANDLES
+// REQUEST INITIAL CANDLES
 // =====================================================
 
 function requestCandles() {
 
   if (
     !socket ||
-    socket.readyState !==
-      WebSocket.OPEN
-  ) {
-
-    return;
-
-  }
+    socket.readyState !== WebSocket.OPEN
+  ) return;
 
   candles = [];
-
 
   const request = {
 
     ticks_history:
       currentSymbol,
 
-    adjust_start_time: 1,
+    adjust_start_time:
+      1,
 
-    count: 200,
+    count:
+      200,
 
-    end: "latest",
+    end:
+      "latest",
 
-    style: "candles",
+    style:
+      "candles",
 
     granularity:
       currentGranularity,
 
-    subscribe: 1,
+    subscribe:
+      0,
 
     req_id:
       requestId++
 
   };
 
-
   console.log(
     "REQUESTING CANDLES:",
     request
   );
 
+  sendRequest(request);
 
-  socket.send(
-    JSON.stringify(
-      request
-    )
+}
+
+
+// =====================================================
+// SUBSCRIBE TO LIVE TICKS
+// =====================================================
+
+function subscribeTicks() {
+
+  if (
+    !socket ||
+    socket.readyState !== WebSocket.OPEN
+  ) return;
+
+  const request = {
+
+    ticks:
+      currentSymbol,
+
+    subscribe:
+      1,
+
+    req_id:
+      requestId++
+
+  };
+
+  console.log(
+    "SUBSCRIBING TO TICKS:",
+    request
   );
+
+  sendRequest(request);
 
 }
 
@@ -407,10 +477,6 @@ function requestCandles() {
 // =====================================================
 
 function handleMessage(data) {
-
-  // -----------------------------------------
-  // ERROR
-  // -----------------------------------------
 
   if (data.error) {
 
@@ -429,17 +495,17 @@ function handleMessage(data) {
     );
 
     return;
-
   }
 
+  if (
+    data.msg_type === "ping"
+  ) return;
 
-  // -----------------------------------------
-  // CANDLES
-  // -----------------------------------------
+
+  // Initial historical candles.
 
   if (
-    data.msg_type ===
-    "candles"
+    data.msg_type === "candles"
   ) {
 
     if (
@@ -449,8 +515,8 @@ function handleMessage(data) {
     ) {
 
       candles =
-        data.candles.map(
-          function (c) {
+        data.candles
+          .map(function (c) {
 
             return {
 
@@ -471,8 +537,18 @@ function handleMessage(data) {
 
             };
 
-          }
-        );
+          })
+          .filter(function (c) {
+
+            return (
+              Number.isFinite(c.epoch) &&
+              Number.isFinite(c.open) &&
+              Number.isFinite(c.high) &&
+              Number.isFinite(c.low) &&
+              Number.isFinite(c.close)
+            );
+
+          });
 
 
       console.log(
@@ -480,9 +556,8 @@ function handleMessage(data) {
         candles.length
       );
 
-
       updateStatus(
-        "Connected"
+        "Live"
       );
 
       clearError();
@@ -498,17 +573,16 @@ function handleMessage(data) {
   }
 
 
-  // -----------------------------------------
-  // LIVE OHLC
-  // -----------------------------------------
+  // Live tick stream.
+  // We build the current timeframe candle locally.
 
   if (
-    data.msg_type ===
-    "ohlc"
+    data.msg_type === "tick" &&
+    data.tick
   ) {
 
-    updateLiveCandle(
-      data.ohlc
+    updateLiveTick(
+      data.tick
     );
 
     return;
@@ -519,41 +593,53 @@ function handleMessage(data) {
 
 
 // =====================================================
-// LIVE CANDLE
+// LIVE TICK -> CURRENT CANDLE
 // =====================================================
 
-function updateLiveCandle(c) {
+function updateLiveTick(tick) {
 
-  if (!c) return;
+  const price =
+    Number(tick.quote);
+
+  const epoch =
+    Number(tick.epoch);
+
+  if (
+    !Number.isFinite(price) ||
+    !Number.isFinite(epoch)
+  ) return;
 
 
-  const candle = {
-
-    epoch:
-      Number(c.epoch),
-
-    open:
-      Number(c.open),
-
-    high:
-      Number(c.high),
-
-    low:
-      Number(c.low),
-
-    close:
-      Number(c.close)
-
-  };
+  const bucket =
+    Math.floor(
+      epoch /
+      currentGranularity
+    ) *
+    currentGranularity;
 
 
   if (
     candles.length === 0
   ) {
 
-    candles.push(
-      candle
-    );
+    candles.push({
+
+      epoch:
+        bucket,
+
+      open:
+        price,
+
+      high:
+        price,
+
+      low:
+        price,
+
+      close:
+        price
+
+    });
 
   } else {
 
@@ -565,28 +651,54 @@ function updateLiveCandle(c) {
 
     if (
       Number(last.epoch) ===
-      candle.epoch
+      bucket
     ) {
 
-      candles[
-        candles.length - 1
-      ] = candle;
+      last.high =
+        Math.max(
+          Number(last.high),
+          price
+        );
+
+      last.low =
+        Math.min(
+          Number(last.low),
+          price
+        );
+
+      last.close =
+        price;
 
     } else if (
-      candle.epoch >
+      bucket >
       Number(last.epoch)
     ) {
 
-      candles.push(
-        candle
-      );
+      candles.push({
+
+        epoch:
+          bucket,
+
+        open:
+          price,
+
+        high:
+          price,
+
+        low:
+          price,
+
+        close:
+          price
+
+      });
 
     }
 
   }
 
 
-  if (
+  while (
     candles.length > 250
   ) {
 
@@ -594,6 +706,12 @@ function updateLiveCandle(c) {
 
   }
 
+
+  updateStatus(
+    "Live"
+  );
+
+  clearError();
 
   updatePrice();
 
@@ -1200,6 +1318,7 @@ function analyze() {
 
 
   console.log({
+
     market:
       currentSymbol,
 
@@ -1231,6 +1350,7 @@ function analyze() {
     signal,
 
     confidence
+
   });
 
 }
